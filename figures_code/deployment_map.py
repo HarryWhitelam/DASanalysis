@@ -12,9 +12,8 @@ import geopandas as gpd
 
 
 def deployment_map():
-    crs = ccrs.PlateCarree()
-    # os_request = cimgt.OSM()
-    os_request = cimgt.StadiaMapsTiles(apikey='c3e0a719-1e2c-4797-9276-16a7292f91a8', style='stamen_terrain')
+    crs = ccrs.PlateCarree()    # set coordinate reference system
+    os_request = cimgt.StadiaMapsTiles(apikey='c3e0a719-1e2c-4797-9276-16a7292f91a8', style='stamen_terrain')   # get open street map
     
     fig_w = 10.0
     fig_h = 8.0
@@ -28,22 +27,13 @@ def deployment_map():
     ax.add_image(os_request, 15)
     # ax.set_rasterized(True)
 
+    # add gridlines
     gridlines = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True, linewidth=0.2, color='black', alpha=0.5, linestyle='--')
-    gridlines.xformatter = LONGITUDE_FORMATTER
-    gridlines.yformatter = LATITUDE_FORMATTER
-    gridlines.top_labels = False
-    gridlines.right_labels = False
-    gridlines.xlabel_style = {'size':10}
-    gridlines.ylabel_style = {'size':10}
+    gridlines.xformatter = LONGITUDE_FORMATTER; gridlines.yformatter = LATITUDE_FORMATTER
+    gridlines.top_labels = False; gridlines.right_labels = False
+    gridlines.xlabel_style = {'size':10}; gridlines.ylabel_style = {'size':10}
     
-    
-    fig_w = ext[1] - ext[0]
-    fig_h = ext[3] - ext[2]
-    
-    # offset_x = (fig_h-fig_w)/fig_h * rel_im_size/2 if fig_h > fig_w else 0
-    # offset_y = (fig_w-fig_h)/fig_w * rel_im_size/2 if fig_w > fig_h else 0
-    
-    # axins = inset_axes(ax, width=f'{rel_im_size*100}%', height=f'{rel_im_size*100}%', borderpad=0, bbox_to_anchor=(0 + offset_x, 0 + offset_y, 1, 1), bbox_transform=ax.transAxes, axes_class=cartopy.mpl.geoaxes.GeoAxes, axes_kwargs=dict(projection=crs))
+    fig_w = ext[1] - ext[0]; fig_h = ext[3] - ext[2]
     
     fig.subplots_adjust(left=0.06, right=0.98, top=0.98, bottom=0.06)
     bbox = ax.get_position()
@@ -54,7 +44,6 @@ def deployment_map():
     
     axins.add_feature(cartopy.feature.LAND, facecolor='lightgrey', zorder=0)
     axins.coastlines(edgecolor='black', lw=0.7, zorder=3)
-    # axins.gridlines(draw_labels=True, dms=True, x_inline=False, y_inline=False, alpha=0.65, lw=0.1, zorder=-1)
     inset_extent = [-10, 2, 50, 59]
     axins.set_extent(inset_extent)
     axins.tick_params(top=False, right=False, left=False, bottom=False)

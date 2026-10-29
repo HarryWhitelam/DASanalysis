@@ -1,16 +1,12 @@
-import sys
-sys.path.append('../NoisePy4DAS/scripts/')
-
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
-from tqdm import tqdm
 import matplotlib.pyplot as plt
 from scipy import stats
 from joblib import Parallel, delayed
 
-from helper_funcs import get_spec_files, get_weather_data, sweep_block_lengths
+from helper_funcs import get_spec_files, get_weather_data
 
 corr_type = 'spearman'
 # fs = [0.1, 0.3, 0.5, 1.0, 1.6, 2.0, 5.0, 10.0]
@@ -34,7 +30,6 @@ dfs = [wind_df, wh_df, tidalh_df, curr_df]
 block_bootstrap_method = 'resample_blocks'  # or 'moving_blocks'
 SAMPLES_PER_DAY = 48
 boot_B = 1000
-rng = np.random.default_rng(0)
 
 target_cols = ['Wind(m/s)','Hs(Hm0)(m)','ASLVBG02','curr']
 weather_t_start = months[0]
@@ -42,200 +37,8 @@ weather_t_end = months[-1] + relativedelta(months=1)
 weather_times = pd.date_range(f'{weather_t_start.date()} 00:00:00', f'{weather_t_end.date()} 00:00:00', freq=timedelta(minutes=30))
 full_weather_df = get_weather_data(weather_t_start, weather_t_end, weather_times, target_cols)
 
-# for t_start in tqdm(months):
-#     t_end = t_start + relativedelta(months=1)
-#     times = pd.date_range(f'{t_start.date()} 00:00:00', f'{t_end.date()} 00:00:00', freq=timedelta(minutes=30))
-#     weather_df = full_weather_df[t_start.date():t_end.date()]
-#     # load each ch 
-#     for cha in chas:
-#         file_path = f'/data/localraid/saved_specs/600s_window/{t_start}__{t_end}_f0.01:49.9_{cha}_spec.txt'
-#         spec = np.loadtxt(file_path, delimiter=',')
-#         f_size, t_size = spec.shape
-#         t_bin_length = (t_end - t_start).total_seconds() / t_size
-#         time_axis = [t_start + timedelta(seconds=t_bin_length * j) for j in range(t_size)]
 
-#         f_bins = np.linspace(0.0, 50.016666666666666, f_size)
-#         for target_f in fs:
-#             idx = (np.abs(f_bins - target_f)).argmin()
-#             psd_series = pd.Series(spec[idx,:], index=pd.to_datetime(time_axis))
-#             psd_series = psd_series[f'{t_start.date()} 00:00:00':f'{t_end.date()} 23:59:59']
-            
-#             window_seconds = 30 * 60
-#             half_window = window_seconds / 2.0
-#             targets = pd.DatetimeIndex(times)
-#             vals = psd_series.values
-#             idx = psd_series.index
-#             cosine_30min = []
-#             for t in targets:
-#                 offs = (idx - t).total_seconds()
-#                 sel = np.abs(offs) <= half_window
-#                 if not np.any(sel):
-#                     cosine_30min.append(np.nan)
-#                     continue
-#                 offs_sel = offs[sel]
-#                 samples = vals[sel].astype(float)
-#                 w = 0.5 * (1.0 + np.cos(2.0 * np.pi * offs_sel / window_seconds))
-#                 good = np.isfinite(samples) & (w > 0)
-#                 if not np.any(good):
-#                     cosine_30min.append(np.nan)
-#                     continue
-#                 w = w[good]
-#                 s = samples[good]
-#                 cosine_30min.append(np.sum(w * s) / np.sum(w))
-#             psd_30min_cosine = pd.Series(cosine_30min, index=targets)
-
-
-#             window_days = 7; step_days = 1
-#             for col, df in zip(target_cols, dfs):
-#                 key = (cha, target_f, t_start.date())
-#                 if corr_type == 'pearson': 
-#                     df.loc[key, 'corr_full'] = np.corrcoef(psd_30min_cosine, weather_df[col])[0,1]
-#                 elif corr_type == 'spearman': 
-#                     df.loc[key, 'corr_full'] = stats.spearmanr(psd_30min_cosine, weather_df[col]).correlation
-                
-#                 last_start = t_end - pd.Timedelta(days=window_days)
-#                 if last_start < t_start:
-#                     window_starts = pd.DatetimeIndex([t_start])
-#                 else:
-#                     window_starts = pd.date_range(start=t_start, end=last_start, freq=f'{step_days}D')
-
-#                 block_rs = []
-#                 block_ns = []
-#                 block_pairs = []
-#                 for ws in window_starts:
-#                     we = ws + pd.Timedelta(days=window_days) - pd.Timedelta(seconds=1)
-#                     x = psd_30min_cosine.loc[ws:we]
-#                     y = weather_df[col].loc[ws:we]
-#                     pair = pd.concat([x, y], axis=1).dropna()
-#                     n = pair.shape[0]
-#                     block_ns.append(n)
-#                     if n < 4:
-#                         block_rs.append(np.nan)
-#                         block_pairs.append(None)
-#                         continue
-#                     xi = pair.iloc[:,0].to_numpy(dtype=float)
-#                     yi = pair.iloc[:,1].to_numpy(dtype=float)
-#                     if corr_type == 'pearson':
-#                         r = np.corrcoef(xi, yi)[0,1]
-#                     else:
-#                         r = stats.spearmanr(xi, yi).correlation
-#                     block_rs.append(r)
-#                     block_pairs.append((xi, yi))
-
-#                 block_rs = np.asarray(block_rs, dtype=float)
-#                 mean_r = np.nanmean(block_rs) if np.any(np.isfinite(block_rs)) else np.nan
-#                 std_r  = np.nanstd(block_rs, ddof=1) if np.sum(np.isfinite(block_rs)) > 1 else np.nan
-#                 df.loc[key, 'block_mean'] = mean_r
-#                 df.loc[key, 'block_std'] = std_r
-                
-#                 lo = np.nan; hi = np.nan
-#                 valid_pairs = [p for p in block_pairs if p is not None]
-#                 n_blocks = len(valid_pairs)
-#                 if n_blocks >= 2:
-#                     if block_bootstrap_method == 'resample_blocks':
-#                         # resample block pairs (with replacement), recompute r per sampled block,
-#                         # then take mean across sampled blocks per replicate
-#                         boot_means = np.empty(boot_B, dtype=float)
-#                         for b in range(boot_B):
-#                             idxs = rng.integers(0, n_blocks, n_blocks)
-#                             rvals = []
-#                             for ii in idxs:
-#                                 xa, ya = valid_pairs[ii]
-#                                 # compute correlation on this block (recompute to avoid numeric drift)
-#                                 if corr_type == 'pearson':
-#                                     r = np.corrcoef(xa, ya)[0,1]
-#                                 else:
-#                                     r = stats.spearmanr(xa, ya).correlation
-#                                 rvals.append(r)
-#                             boot_means[b] = np.nanmean(rvals)
-#                         lo, hi = np.nanpercentile(boot_means, [2.5, 97.5])
-
-#                     elif block_bootstrap_method == 'moving_blocks':
-#                         # moving-block bootstrap: assemble a full-length synthetic series by sampling
-#                         # contiguous blocks (in samples) from the original full series, then compute
-#                         # the global correlation for each replicate.
-#                         N = len(psd_30min_cosine)
-#                         block_size = max(1, int(window_days * SAMPLES_PER_DAY))
-#                         if N >= 2 and block_size >= 1:
-#                             boot_corrs = np.empty(boot_B, dtype=float)
-#                             psd_arr = psd_30min_cosine.to_numpy(dtype=float)
-#                             weather_arr = weather_df[col].to_numpy(dtype=float)
-#                             max_start = max(0, N - block_size)
-#                             n_blocks_needed = int(np.ceil(N / block_size))
-#                             for b in range(boot_B):
-#                                 xb_parts = []
-#                                 yb_parts = []
-#                                 for k in range(n_blocks_needed):
-#                                     s = rng.integers(0, max_start + 1)
-#                                     xb_parts.append(psd_arr[s:s+block_size])
-#                                     yb_parts.append(weather_arr[s:s+block_size])
-#                                 xb_full = np.concatenate(xb_parts)[:N]
-#                                 yb_full = np.concatenate(yb_parts)[:N]
-#                                 mask = np.isfinite(xb_full) & np.isfinite(yb_full)
-#                                 if mask.sum() < 4:
-#                                     boot_corrs[b] = np.nan
-#                                 else:
-#                                     if corr_type == 'pearson':
-#                                         boot_corrs[b] = np.corrcoef(xb_full[mask], yb_full[mask])[0,1]
-#                                     else:
-#                                         boot_corrs[b] = stats.spearmanr(xb_full[mask], yb_full[mask]).correlation
-#                             lo, hi = np.nanpercentile(boot_corrs, [2.5, 97.5])
-#                         else:
-#                             lo = np.nan; hi = np.nan
-#                     else:
-#                         # fallback to naive resample of block correlations (rare)
-#                         clean = block_rs[np.isfinite(block_rs)]
-#                         if clean.size >= 2:
-#                             boots = rng.choice(clean, size=(boot_B, clean.size), replace=True)
-#                             boot_means = np.nanmean(boots, axis=1)
-#                             lo, hi = np.percentile(boot_means, [2.5, 97.5])
-#                         else:
-#                             lo = np.nan; hi = np.nan
-#                 else:
-#                     lo = np.nan; hi = np.nan
-                
-#                 df.loc[key, 'n_blocks'] = int(np.sum(np.isfinite(block_rs)))
-#                 df.loc[key, 'n_samples'] = int(np.nansum(block_ns))
-#                 df.loc[key, 'boot_lo'] = lo
-#                 df.loc[key, 'boot_hi'] = hi
-
-
-# wind_df.to_csv(f'/data/localraid/weather_corrs/full_wind_corr_{corr_type}.csv')
-# wh_df.to_csv(f'/data/localraid/weather_corrs/full_wh_corr_{corr_type}.csv')
-# curr_df.to_csv(f'/data/localraid/weather_corrs/full_curr_corr_{corr_type}.csv')
-# tidalh_df.to_csv(f'/data/localraid/weather_corrs/full_tidalh_corr_{corr_type}.csv')
-
-# cha = 750
-# freq = 0.5
-# series_mean = wind_df.loc[(cha, freq)]
-# series_std  = wind_std_df.loc[(cha, freq)]   # or the std-DataFrame you produced
-
-# # convert column labels to datetimes (if they are dates already, this is safe)
-# x = pd.to_datetime(series_mean.index)
-# y = series_mean.values.astype(float)
-# yerr = series_std.values.astype(float)
-
-# lo = wind_lo_df.loc[(cha, freq)].astype(float).values
-# hi = wind_hi_df.loc[(cha, freq)].astype(float).values
-# y_se = np.where(np.isfinite(lo) & np.isfinite(hi), (hi - lo) / (2.0 * 1.96), np.nan)
-
-# fig, ax = plt.subplots(figsize=(8,3.5))
-# ax.errorbar(x, y, yerr=yerr, fmt='o-', label='mean ± std')
-# ax.fill_between(x, y - y_se*1.96, y + y_se*1.96, color='C0', alpha=0.15,
-#                 label='approx 95% CI of mean (SE*1.96)')
-# ax.set_xlabel('Month')
-# ax.set_ylabel('Correlation (psd vs wind)')
-# ax.set_title(f'Channel {cha} @ {freq} Hz')
-# ax.legend()
-# plt.xticks(rotation=45)
-# plt.tight_layout()
-# plt.show()
-
-
-
-##### PARALLEL!!!!!
-
-def process_unit(t_start, cha, seed=0):
+def process_month(t_start, cha, seed=0):
     """Process one month (t_start) and channel (cha). Return list of (key, stats_dict)"""
     rng_local = np.random.default_rng(seed)
     out = []
@@ -380,7 +183,7 @@ def process_unit(t_start, cha, seed=0):
 
 # --- run in parallel and collect results ---
 tasks = [(m, c) for m in months for c in chas]
-results = Parallel(n_jobs=-1, verbose=5)(delayed(process_unit)(m, c, seed=42 + i) for i, (m, c) in enumerate(tasks))
+results = Parallel(n_jobs=-1, verbose=5)(delayed(process_month)(m, c, seed=42 + i) for i, (m, c) in enumerate(tasks))
 
 # flatten and write into DataFrames
 for sublist in results:

@@ -1,6 +1,3 @@
-import sys
-sys.path.append("./src")
-sys.path.append("./DASstore")
 import os
 import gc
 import numpy as np
@@ -22,58 +19,14 @@ from matplotlib.dates import AutoDateLocator
 from matplotlib.collections import LineCollection
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
-from skimage.util import compare_images
-import contextily as cx
 import cartopy.io.img_tiles as cimgt
 from math import sin, cos, atan2, degrees, radians
 import multiprocessing
 from tqdm import tqdm
 
 from TDMS_Read import TdmsReader
-from tdms_io import get_reader_array, get_filepath_array, get_data_from_array, get_dir_properties, load_xcorr
+from tdms_io import get_filepath_array, get_data_from_array
 from weather import plot_waverider_csv, plot_met_csv, plot_era5_csv
-
-
-def dms_to_dd(degrees, minutes=0, seconds=0):
-    return degrees + (minutes/60) + (seconds/3600)
-
-
-def plot_gps_coords(file_path):
-    gps_df = pd.read_csv(file_path, sep=',', index_col=0)
-    
-    gps_df[['lat_degs', 'lat_mins']] = gps_df['lat'].str.split(' ', expand=True).astype(float)
-    gps_df[['lon_degs', 'lon_mins']] = gps_df['lon'].str.split(' ', expand=True).astype(float)
-    gps_df['lat'], gps_df['lon'] = dms_to_dd(gps_df['lat_degs'], gps_df['lat_mins']), dms_to_dd(gps_df['lon_degs'], gps_df['lon_mins'])
-    
-    gdf = gpd.GeoDataFrame(
-        gps_df[['lat', 'lon']], geometry=gpd.points_from_xy(gps_df['lon'], gps_df['lat'], crs='EPSG:4326')
-    )
-    
-    # gps_df[['lat', 'lon']].to_csv('track_gps.csv', sep=',')
-    
-    ax = gdf.plot(figsize=(10, 10), color='red')
-    cx.add_basemap(ax, crs=gdf.crs)
-    plt.show()
-
-
-def image_comparison(data_dict, comp_ids, method='all', ncols=2, cmap='gray'):
-    data_list = list(data_dict.values())
-    if method in ('diff', 'all'):
-        data_dict['diff'] = compare_images(data_dict.get(comp_ids[0]), data_dict.get(comp_ids[1]), method='diff')
-    if method in ('blend', 'all'):
-        data_dict['blend'] = compare_images(data_dict.get(comp_ids[0]), data_dict.get(comp_ids[1]), method='blend')
-    
-    nrows = len(data_dict) // ncols + (len(data_dict) % ncols > 0)
-    
-    fig = plt.figure(figsize=(15, 12))
-    # plt.suptitle("TITLE HERE")
-    for n, (key, val) in enumerate(data_dict.items()): 
-        ax = plt.subplot(nrows, ncols, n + 1)
-        ax.imshow(val, cmap=cmap, aspect='auto', interpolation='none')
-        ax.title.set_text(key)
-    
-    fig.tight_layout()
-    plt.show()
 
 
 def octave_smooth(psd, freqs, width_octaves=0.5, axis=0, eps=1e-12):
@@ -285,12 +238,6 @@ def octave_smooth_gpu(psd, freqs, width_octaves=0.5, axis=0, eps=1e-12, chunk_si
 def parallel_spectral_analysis():
     dir_path = '/data/QNAP1_Data/Data/'
     
-    # nodes period 2025 Apr 01-10
-    # storm (and not) periods 2024 12 08-11, 11-14
-    # 2024 12 whole month
-    
-    # for y, ms in [[2024, [4,5,6,7,8,9,10,11,12]], [2025, [1,2,3,4,5,6,7]]]:
-        # for m in ms:
     for y, m, d, ds in [[2024, 8, 1, 1], [2025, 4, 1, 13560], [2024, 12, 1, None], [2024, 12, 8, 3], [2024, 12, 11, 3]]:
         t_start = datetime(year=y, month=m, day=d)
         if ds == None:
@@ -384,38 +331,12 @@ def ts_spectrogram(dir_path:str, prepro_para:dict, t_start:datetime, save_spec=F
         plt.sca(ax=ax)
     
     if n_minute > 1440:
-        # n_days = int(n_minute / 1440) + 1
-        # midnight_start = t_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        # try:
-        #     tick_dates = pd.date_range(midnight_start, end=midnight_start+timedelta(days=n_days), periods=5)
-        # except:
-        #     tick_dates = pd.date_range(midnight_start, periods=n_days, freq=timedelta(days=1))
-        # tick_positions = []
-        # for tick_date in tick_dates:
-        #     minutes_from_start = (tick_date - t_start).total_seconds() / 60
-        #     tick_positions.append((minutes_from_start / n_minute) * ext[1])
-        
-        # valid_ticks = [(pos, date) for pos, date in zip(tick_positions, tick_dates) 
-        #             if 0 <= pos <= ext[1]]
-        # if valid_ticks:
-        #     positions, dates = zip(*valid_ticks)
-        #     _ = plt.xticks(positions, [d.strftime('%Y-%m-%d') for d in dates], rotation=30)
-        
-        # minor_tick_interval = 1440 / n_minute * ext[1]
-        # minor_positions = np.arange(0, ext[1], minor_tick_interval)
-        # _ = plt.xticks(minor_positions, minor=True)
         ax.xaxis_date()
         locator = AutoDateLocator(minticks=3, maxticks=6)
         locator.intervald[MINUTELY] = [1, 2, 5, 10, 15, 30]
         locator.intervald[SECONDLY] = [1, 2, 5, 10, 15, 30]
         ax.xaxis.set_major_formatter(ObsPyAutoDateFormatter(locator))
         ax.xaxis.set_major_locator(locator)
-        
-        # ticks = ax.get_xticks()     # forcing first date to appear
-        # ticks = np.concatenate(([mdates.date2num(t_start)], ticks))
-        # ticks = np.unique(ticks)
-        
-        # ax.set_xticks(ticks)
         plt.setp(ax.get_xticklabels(), rotation=30, ha='right')
     else: 
         _ = plt.xticks(np.linspace(0, ext[1], 4), pd.date_range(t_start, t_start+timedelta(minutes=n_minute), periods=4), rotation=30)
@@ -424,7 +345,6 @@ def ts_spectrogram(dir_path:str, prepro_para:dict, t_start:datetime, save_spec=F
     ax.set_ylim(freqmin, freqmax)
     
     fig.colorbar(im1, label=r'Amplitude [$n\epsilon^2/Hz$] [dB]')
-    # plt.tight_layout()
     plt.subplots_adjust(top=0.922, bottom=0.15, left=0.131, right=0.953, hspace=0.2, wspace=0.2)
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
@@ -436,7 +356,6 @@ def ts_spectrogram(dir_path:str, prepro_para:dict, t_start:datetime, save_spec=F
 def ppsd(dir_path:str, prepro_para:dict, t_start:datetime, save_ppsd=False, data=None, window_length=3600):
     cha1, sps, f1, f2, n_minute = prepro_para.get('cha1'), prepro_para.get('samp_freq'), prepro_para.get('freqmin'), prepro_para.get('freqmax'), prepro_para.get('n_minute')
     out_dir = f"./results/figures/PSD_Experiments/{window_length}s_window/ppsds/"
-    # out_dir = f"./results/figures/PSD_Experiments/smoothing_check/ppsds/"
     
     if type(data)==type(None):
         filepath_array, timestamps = get_filepath_array(dir_path)

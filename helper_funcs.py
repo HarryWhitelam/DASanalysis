@@ -1,14 +1,13 @@
-import sys
-sys.path.append('../NoisePy4DAS/scripts/')
-
 import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-from datetime import datetime, timedelta
+from datetime import datetime
+from pyTMD.compute import tide_elevations, tide_currents
 
 from weather import *
+
 
 def zscore(x): return (x - np.nanmean(x)) / np.nanstd(x)
 
@@ -77,7 +76,7 @@ def extract_psd_time_series(ppsd, frequency_hz, return_times=False, smooth=False
 
 
 def rolling_xcorr_plot(psd_series, tidal_series,
-                       window_hours=12, overlap_frac=0.75,
+                       window_hours=24, overlap_frac=0.75,
                        normalise_window=True, cmap='seismic',
                        vmax=1.0, vmin=-1.0, show=True, var_label=None):
     """
@@ -85,14 +84,14 @@ def rolling_xcorr_plot(psd_series, tidal_series,
     Returns (fig, ax, corr_matrix, lags, starts).
 
     - psd_series, tidal_series: pandas.Series aligned on the same DatetimeIndex.
-    - window_hours: window length in hours (default 12).
-    - overlap_frac: fraction overlap between windows (0..1). default 0.75.
+    - window_hours: window length in hours (default 24).
+    - overlap_frac: fraction overlap between windows (default 0.75).
     - normalise_window: normalise each window's correlation by its max abs value.
     - cmap, vmin, vmax: imshow colormap and limits.
     """
 
     common_idx = psd_series.index.intersection(tidal_series.index)
-    ps = psd_series.reindex(common_idx); td = tidal_series.reindex(common_idx)    
+    ps = psd_series.reindex(common_idx); td = tidal_series.reindex(common_idx)
     mask = ps.notna() & ps.notna()
     ps = ps[mask]; td = td[mask]
 
@@ -234,174 +233,10 @@ def rolling_xcorr_plot(psd_series, tidal_series,
     if show:
         plt.show()
 
-    return fig, ax, corr_matrix, lags, starts
-
-
-def zero_lag_series(corr_matrix, lags, starts, psd_index):
-    """
-    Return a pandas.Series of the correlation value at (or nearest to) 0s lag
-    for each rolling window.
-
-    Parameters
-    - corr_matrix : 2D ndarray (n_windows, n_lags) returned by rolling_xcorr_plot
-    - lags        : 1D ndarray of lag times (seconds) returned by rolling_xcorr_plot
-    - starts      : 1D ndarray of start indices (sample indices in psd_index) for each window
-    - psd_index   : DatetimeIndex corresponding to the full PSD series used to build windows
-
-    Returns
-    - pd.Series indexed by the window centre timestamps (DatetimeIndex), values = corr @ 0s lag
-    """
-    if corr_matrix.size == 0 or len(lags) == 0 or len(starts) == 0:
-        return pd.Series(dtype=float)
-
-    lag_idx = int(np.argmin(np.abs(lags)))
-
-    vals = corr_matrix[:, lag_idx]
-
-    corr_len = corr_matrix.shape[1]
-    window_samps = int((corr_len + 1) // 2)
-    centre_indices = (starts + window_samps // 2).astype(int)
-
-    centre_indices = np.clip(centre_indices, 0, len(psd_index)-1)
-
-    times = pd.DatetimeIndex(psd_index[centre_indices])
-    return pd.Series(data=vals, index=times)
-
-
-def avg_lag_series(corr_matrix, lags, starts, psd_index, mode='best_avg'):
-    """
-    Return a pandas.Series of the correlation value at the highest correlation value lag
-    for each rolling window.
-
-    Parameters
-    - corr_matrix : 2D ndarray (n_windows, n_lags) returned by rolling_xcorr_plot
-    - lags        : 1D ndarray of lag times (seconds) returned by rolling_xcorr_plot
-    - starts      : 1D ndarray of start indices (sample indices in psd_index) for each window
-    - psd_index   : DatetimeIndex corresponding to the full PSD series used to build windows
-
-    Returns
-    - pd.Series indexed by the window centre timestamps (DatetimeIndex), values = corr @ 0s lag
-    """
-    if corr_matrix.size == 0 or len(lags) == 0 or len(starts) == 0:
-        return pd.Series(dtype=float)
-
-    if mode == 'best_avg':
-        score = np.nanmean(np.abs(corr_matrix), axis=0)
-        lag_idx = int(np.nanargmax(score))
-    elif mode == 'max':
-        score = np.nanmean(corr_matrix, axis=0)
-        lag_idx = int(np.nanargmax(score))
-    elif mode == 'min':
-        score = np.nanmean(corr_matrix, axis=0)
-        lag_idx = int(np.nanargmin(score))
-    else:
-        raise ValueError(f"Unsupported mode: {mode}")
-    
-    vals = corr_matrix[:, lag_idx]
-
-    corr_len = corr_matrix.shape[1]
-    window_samps = int((corr_len + 1) // 2)
-    centre_indices = (starts + window_samps // 2).astype(int)
-    centre_indices = np.clip(centre_indices, 0, len(psd_index)-1)
-
-    times = pd.DatetimeIndex(psd_index[centre_indices])
-    series = pd.Series(data=vals, index=times)
-    
-    try:
-        series.name = f"corr@{lags[lag_idx]:.0f}s"
-    except Exception:
-        pass
-    return series
-
-
-def full_series_xcorr(psd_series, tidal_series,
-                      normalise=True, max_lag_hours=None,
-                      plot=True, figsize=(10,4), label=None, save=False):
-    """
-    Compute cross-correlation between two pandas.Series over their entire overlapping span.
-    Returns: (fig, ax, corr, lags_seconds, corr_series)
-      - corr : ndarray of cross-correlation (coefficients if normalise=True)
-      - lags_seconds : ndarray of lag values in seconds (negative => tide leads)
-      - corr_series : pd.Series indexed by lag seconds
-    Optional: limit lags to +/- max_lag_hours for plotting/return.
-    """
-    df = pd.concat({'psd': psd_series, 'tide': tidal_series}, axis=1, join='inner').dropna()
-    if df.empty:
-        raise RuntimeError("No overlapping data between psd_series and tidal_series")
-
-    x = df['psd'].to_numpy(dtype=float)
-    y = df['tide'].to_numpy(dtype=float)
-    N = len(x)
-    if N < 2:
-        raise RuntimeError("Need at least 2 samples to compute cross-correlation")
-
-    dt_sec = pd.Series(df.index).diff().median().total_seconds()
-
-    xn = x - x.mean()
-    yn = y - y.mean()
-
-    raw = np.correlate(xn, yn, mode='full') / N
-
-    if normalise:
-        sx = x.std(ddof=0)
-        sy = y.std(ddof=0)
-        denom = sx * sy
-        if denom == 0:
-            corr = raw
-        else:
-            corr = raw / denom
-    else:
-        corr = raw
-
-    lags = np.arange(-N + 1, N) * dt_sec
-
-    if max_lag_hours is not None:
-        max_s = float(max_lag_hours) * 3600.0
-        mask = np.abs(lags) <= max_s
-        corr = corr[mask]
-        lags = lags[mask]
-
-    if plot:
-        fig, ax = plt.subplots(figsize=figsize)
-        lag_hours = lags / 3600.0
-        ax.plot(lag_hours, corr, '-', lw=1)
-        ax.axvline(0.0, color='k', lw=0.8, linestyle='--')
-        if corr.size > 0 and not np.all(np.isnan(corr)):
-            peak_idx = int(np.nanargmax(np.abs(corr)))
-            peak_lag_h = lags[peak_idx] / 3600.0
-            peak_val = corr[peak_idx]
-            ax.axvline(peak_lag_h, color='red', lw=1.0, linestyle='--', zorder=6)
-            ax.annotate(f"{peak_lag_h:.2f}h\n{peak_val:.2f}",
-                        xy=(peak_lag_h, 1.02), xycoords=('data', 'axes fraction'),
-                        ha='center', va='bottom', color='red', fontsize=8, zorder=7)
-        ax.set_xlabel('Lag (hours)')
-        ax.set_ylabel('Cross-correlation' + (' (coeff)' if normalise else ''))
-        ax.grid(True)
-        if lag_hours.ptp() >= 24.0:
-            hmin = int(np.ceil(lag_hours.min() / 24.0)) * 24
-            hmax = int(np.floor(lag_hours.max() / 24.0)) * 24
-            if hmax >= hmin:
-                hours = np.arange(hmin, hmax + 1, 24)
-                ax.set_xticks(hours)
-                ax.set_xticklabels([f"{h}h" for h in hours])
-            else:
-                from matplotlib.ticker import MaxNLocator
-                ax.xaxis.set_major_locator(MaxNLocator(5))
-        else:
-            from matplotlib.ticker import MaxNLocator
-            ax.xaxis.set_major_locator(MaxNLocator(5))
-        if save:
-            if label is None:
-                fname = './figures/correlations/full_series_corr.png'
-            else:
-                fname = f'./figures/correlations/{label}_corr.png'
-            plt.savefig(fname, bbox_inches='tight')
-        return fig, ax
-            
+    return fig, ax, corr_matrix, lags, starts           
 
 
 def get_tidal_data(lats, lons, times):
-    from pyTMD.compute import tide_elevations, tide_currents    
     tide_h = tide_elevations(
         x=lons,
         y=lats,
@@ -421,12 +256,6 @@ def get_tidal_data(lats, lons, times):
         TIME="datetime",
     )
     return tide_h, tide_uv
-
-
-def get_correlation(psd_series, var_series):
-    pearson = psd_series.corr(var_series, method='pearson')
-    spearman = psd_series.corr(var_series, method='spearman')
-    return (pearson, spearman)
 
 
 def get_spec_files(dir:str, t0:datetime, t1:datetime, target_cha:int):
@@ -471,34 +300,3 @@ def get_weather_data(t_start, t_end, times, cols=None):
     if cols:
         weather_df = weather_df[cols]
     return weather_df
-
-
-def sweep_block_lengths(psd, weather, col, t_start, t_end, block_days_list, corr_type='pearson'):
-    import pandas as pd, numpy as np
-    results = []
-    for bd in block_days_list:
-        edges = pd.date_range(start=t_start, end=t_end, freq=f'{bd}D')
-        if edges[-1] < t_end: edges = edges.append(pd.DatetimeIndex([t_end]))
-        block_rs, block_ns = [], []
-        for i in range(len(edges)-1):
-            a, b = edges[i], edges[i+1] - pd.Timedelta(seconds=1)
-            pair = pd.concat([psd.loc[a:b], weather[col].loc[a:b]], axis=1).dropna()
-            n = pair.shape[0]
-            if n < 4:
-                block_rs.append(np.nan); block_ns.append(n); continue
-            r = pair.iloc[:,0].corr(pair.iloc[:,1], method=('pearson' if corr_type=='pearson' else 'spearman'))
-            block_rs.append(r); block_ns.append(n)
-        br = np.asarray(block_rs, dtype=float); bn = np.asarray(block_ns, dtype=int)
-        mean_arith = np.nanmean(br) if np.any(np.isfinite(br)) else np.nan
-        std_blocks = np.nanstd(br, ddof=1) if np.sum(np.isfinite(br))>1 else np.nan
-        fisher_w = np.nan
-        if corr_type=='pearson':
-            mask = np.isfinite(br) & (np.abs(br)<0.999999)
-            if mask.any():
-                z = np.arctanh(br[mask])
-                w = (bn[mask]-3).astype(float); w = np.where(w>0,w,0.0)
-                fisher_w = np.tanh(np.sum(z * w) / (w.sum() if w.sum()>0 else z.size))
-        results.append((bd, mean_arith, fisher_w, std_blocks, np.sum(np.isfinite(br))))
-    return pd.DataFrame(results, columns=['block_days','mean_arith','fisher_weighted','std_blocks','n_blocks'])
-
-

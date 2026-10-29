@@ -6,19 +6,7 @@ from tqdm import tqdm
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
-import contextily as cx
 import gc
-
-
-def plot_nodes():
-    df = pd.read_csv('nodes.csv', sep='\s*,\s*', header=0, index_col=0)
-    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['Lon'], df['Lat']), crs='EPSG:4326')
-    print(gdf)
-    
-    ax = gdf.plot(figsize=(10, 10), color='red')
-    gdf.apply(lambda x: ax.annotate(text=x.name, xy=x.geometry.centroid.coords[0], ha='center'), axis=1)
-    cx.add_basemap(ax, crs=gdf.crs, source=cx.providers.CartoDB.Positron)
-    plt.savefig('figures/nodes_map.png')
 
 
 def rotate_node_data(station, t0):
@@ -33,20 +21,7 @@ def rotate_node_data(station, t0):
             tr.stats.component = '2'
 
     inv = read_inventory('./station.xml')
-    # st_cp = st.copy()
     st.rotate(method='->ZNE', inventory=inv)
-
-    # fig, axs = plt.subplots(nrows=3)
-    # for ax, comp1, comp2 in zip(axs, ['N', 'E', 'Z'], ['1', '2', 'Z']):
-    #     tr1 = st.select(component=comp1)[0]
-    #     tr2 = st_cp.select(component=comp2)[0]
-        
-    #     ax.plot(tr1.times(), tr1.data,
-    #             label="std ({})".format(tr1.stats.channel))
-    #     ax.plot(tr2.times(), tr2.data,
-    #             label="rtd ({})".format(tr2.stats.channel))
-    #     ax.legend()
-    # plt.show()
     
     for tr in st:
         tr.write(rf"/data/localraid/UEA_nodes_mseed_mV/rotated/{tr.id}..{tr.stats.starttime}.MSEED", format="MSEED")
@@ -66,8 +41,6 @@ def prep_node_data(station, t0, save_resp_rem=True):
 
     for tr in st: tr.data *= 0.001      # convert from mV to V
     st.decimate(16)     # decimate to 250 Hz (factor of 16)
-    # print(st)
-    # st.plot()
     
     if save_resp_rem:
         t1 = t0 + (60*60*12)
@@ -84,10 +57,9 @@ def prep_node_data(station, t0, save_resp_rem=True):
     del tr
     gc.collect()
 
-stations = ['04915', '05014', '03479', '03713', '05330', '05100']
-# station = '453005014'
-t_start = UTCDateTime('2025-04-01T:00:00.00')
-n_days = 10
+# stations = ['04915', '05014', '03479', '03713', '05330', '05100']
+# t_start = UTCDateTime('2025-04-01T:00:00.00')
+# n_days = 10
 
 # prep_node_data(station, t_start)
 
@@ -97,6 +69,3 @@ n_days = 10
 #             prep_node_data(station, t0)
 #             rotate_node_data(station, t0)
 #             pbar.update(1)
-
-
-plot_nodes()
